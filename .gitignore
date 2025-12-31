@@ -1,0 +1,31 @@
+# =====================
+# Simulation / EDA tool generated files
+# =====================
+
+# ModelSim / Questa
+work/
+vsim.wlf
+transcript
+*.mpf
+*.mti
+*.vcd
+
+# Compilation & temp files
+*.log
+*.bak
+*.tmp
+
+# =====================
+# OS / Editor junk
+# =====================
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.~*
+
+# =====================
+# PDFs & large references (optional)
+# =====================
+ARM_IHI0033A_AMBA_AHB-Lite_SPEC.pdf
