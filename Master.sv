@@ -15,22 +15,22 @@ module Master(
     /* Outputs */
     // Address and Control
     output logic [31:0] HADDR,
-    output logic HWRITE,
-    output logic [2:0] HSIZE,
-    output logic [2:0] HBURST,
+    output hwrite_t HWRITE,
+    output hsize_t HSIZE,
+    output hburst_t HBURST,
     //output logic [3:0] HPROT,
-    output logic [1:0] HTRANS,
+    output htrans_t HTRANS,
     //output logic HMASTLOCK,
     // Data
     output logic [31:0] HWDATA,
 
     /* Testbench control inputs */
     input logic [31:0] test_HADDR,
-    input logic test_HWRITE,
-    input logic [2:0] test_HSIZE,
-    input logic [2:0] test_HBURST,
+    input hwrite_t test_HWRITE,
+    input hsize_t test_HSIZE,
+    input hburst_t test_HBURST,
     //input logic [3:0] test_HPROT,
-    input logic [1:0] test_HTRANS,
+    input htrans_t test_HTRANS,
     //input logic test_HMASTLOCK,
     input logic [31:0] test_HWDATA,
     input logic test_start_transfer
@@ -48,6 +48,9 @@ module Master(
 
     // internal signals
     logic prev_HREADY;
+    //logic [4:0] address_boundry; // HBURST * HSIZE
+    //logic [3:0] wrap_addr_LSB;
+    logic [1:0] addr_alignment_mask;
 
     // Sequential logic for state transition
     always_ff @(posedge HCLK or negedge HRESETn) begin
@@ -58,6 +61,13 @@ module Master(
             current_state <= next_state;
             prev_HREADY <= HREADY;
         end
+    end
+
+    // Combinational logic for internal signals calculation
+    always_comb begin
+        //address_boundry = (HBURST == HBURST_INCR4 || HBURST == HBURST_WRAP4)? (3'b100 * (1 << HSIZE)): 0;
+        addr_alignment_mask = (HSIZE == HSIZE_HALFWORD) ? 2'b10 : (HSIZE == HSIZE_WORD) ? 2'b00 : 2'b11;  // Here 1 is for HSIZE_BYTE 
+        //wrap_addr_LSB = {2'b11, addr_alignment_mask};
     end
 
     // Combinational logic for next state
@@ -96,8 +106,8 @@ module Master(
 
             IDLE: begin
                 HADDR = 32'b0;
-                HWRITE = 1'b0;
-                HSIZE = 3'b000;
+                HWRITE = HWRITE_READ;
+                HSIZE = HSIZE_BYTE;
                 HBURST = HBURST_SINGLE;
                 HTRANS = HTRANS_IDLE;
                 HWDATA = 32'b0;
@@ -135,6 +145,14 @@ module Master(
         (HSIZE == HSIZE_BYTE || HSIZE == HSIZE_HALFWORD || HSIZE == HSIZE_WORD);
     endproperty
 
+    property valid_HBURST;
+        @(posedge HCLK) disable iff (!HRESETn)
+        (HBURST == HBURST_INCR || 
+        HBURST == HBURST_INCR4 || 
+        HBURST == HBURST_SINGLE || 
+        HBURST == HBURST_WRAP4);
+    endproperty
+
     property addr_alignment;
         @(posedge HCLK) disable iff (!HRESETn)
         (HTRANS != 2'b00) |-> (
@@ -143,6 +161,51 @@ module Master(
             (HSIZE == HSIZE_WORD && HADDR[1:0] == 2'b00)    // Word - aligned to 4 bytes
         );
     endproperty
+
+    // property addr_incr; // TODO This will break for wrap-around bursts 
+    //     @(posedge HCLK) disable iff (!HRESETn)
+    //     (HTRANS == HTRANS_SEQ && HREADY) |-> (
+    //         HADDR == $past(HADDR) + (1 << $past(HSIZE))
+    //     );
+    // endproperty
+
+    property addr_incr;
+        @(posedge HCLK) disable iff (!HRESETn)
+        (
+            (
+                HBURST == HBURST_INCR                                                        || 
+                HBURST == HBURST_INCR4                                                       || 
+                (HBURST == HBURST_WRAP4 && HADDR[3:0] != 4'b0000 && HSIZE == HSIZE_WORD)     ||
+                (HBURST == HBURST_WRAP4 && HADDR[2:0] != 3'b000  && HSIZE == HSIZE_HALFWORD) ||
+                (HBURST == HBURST_WRAP4 && HADDR[1:0] != 2'b00   && HSIZE == HSIZE_BYTE) 
+            ) &&  
+            (HTRANS == HTRANS_SEQ) && 
+            (HREADY)
+        ) |-> (
+            // Consequent - add display when it triggers
+            (HADDR == ($past(HADDR) + (1 << $past(HSIZE))))
+        );
+    endproperty
+
+    property addr_wrap;
+        @(posedge HCLK) disable iff (!HRESETn)
+        (
+            (HBURST == HBURST_WRAP4) &&
+            (
+                (HADDR[3:0] == 4'b0000 && HSIZE == HSIZE_WORD)     ||
+                (HADDR[2:0] == 3'b000  && HSIZE == HSIZE_HALFWORD) ||
+                (HADDR[1:0] == 2'b00   && HSIZE == HSIZE_BYTE) 
+            ) &&
+            (HTRANS == HTRANS_SEQ) &&
+            (HREADY)
+        ) |-> (
+            ((HADDR[3:0] == 4'b0000 && HSIZE == HSIZE_WORD)      && HADDR == $past(HADDR) & 32'hFFFF_FFF0) ||
+            ((HADDR[2:0] == 3'b000  && HSIZE == HSIZE_HALFWORD)  && HADDR == $past(HADDR) & 32'hFFFF_FFF8) ||
+            ((HADDR[1:0] == 2'b00   && HSIZE == HSIZE_BYTE)      && HADDR == $past(HADDR) & 32'hFFFF_FFFC)
+        );
+    endproperty
+
+
 
     property hold_signals_stable_when_not_ready;
         @(posedge HCLK) disable iff (!HRESETn)
@@ -158,8 +221,15 @@ module Master(
 
     // Assume properties
     assume property (valid_HSIZE);
+    assume property (valid_HBURST);
 
     // Assert properties
     assert property (addr_alignment);
     assert property (hold_signals_stable_when_not_ready);
+    assert property (addr_incr)
+        else $error("INCR FAIL @ %0t: HADDR=%h past=%h $past(HSIZE)=%0d HBURST=%0d HTRANS=%0d HREADY=%0d", 
+                $time, HADDR, $past(HADDR), $past(HSIZE), HBURST, HTRANS, HREADY);
+    assert property (addr_wrap)
+        else $error("WRAP FAIL @ %0t: HADDR=%h past=%h $past(HSIZE)=%0d HBURST=%0d HTRANS=%0d HREADY=%0d", 
+                    $time, HADDR, $past(HADDR), $past(HSIZE), HBURST, HTRANS, HREADY);
 endmodule

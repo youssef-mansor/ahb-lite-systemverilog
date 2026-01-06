@@ -24,8 +24,14 @@ Thumbs.db
 *.swp
 *.swo
 *.~*
+etch*
 
 # =====================
 # PDFs & large references (optional)
 # =====================
 ARM_IHI0033A_AMBA_AHB-Lite_SPEC.pdf
+
+# =====================
+# Diff files
+# =====================
+*.diff
